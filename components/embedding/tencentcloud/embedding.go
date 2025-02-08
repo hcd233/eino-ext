@@ -80,13 +80,15 @@ func (e *Embedder) EmbedStrings(ctx context.Context, texts []string, opts ...emb
 
 	// NOTE: len of req.InputList must less equal than 200, so we need to split texts into batches
 	// reference: https://pkg.go.dev/github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/hunyuan@v1.0.1093/v20230901#GetEmbeddingRequest.InputList
+	batchSize := 200
+
 	req := hunyuan.NewGetEmbeddingRequest()
 	req.SetContext(ctx)
 
 	promptTokens, totalTokens := 0, 0
 	embeddings = make([][]float64, len(texts))
-	for l := 0; l < len(texts); l += 200 {
-		r := min(l+200, len(texts))
+	for l := 0; l < len(texts); l += batchSize {
+		r := min(l+batchSize, len(texts))
 
 		req.InputList = common.StringPtrs(texts[l:r])
 		rsp, err := e.client.GetEmbedding(req)
