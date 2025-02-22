@@ -27,7 +27,7 @@ import (
 	hunyuan "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/hunyuan/v20230901"
 )
 
-const fixHunyuanEmbeddingModel = "hunyuan-embedding"
+const defaultModel = "hunyuan-embedding"
 
 type EmbeddingConfig struct {
 	SecretID  string
@@ -70,7 +70,7 @@ func (e *Embedder) EmbedStrings(ctx context.Context, texts []string, opts ...emb
 	}()
 
 	conf := &embedding.Config{
-		Model: fixHunyuanEmbeddingModel, // hunyuan embedding does not specify model
+		Model: defaultModel, // hunyuan embedding does not specify model
 	}
 
 	ctx = callbacks.OnStart(ctx, &embedding.CallbackInput{
@@ -97,9 +97,9 @@ func (e *Embedder) EmbedStrings(ctx context.Context, texts []string, opts ...emb
 		}
 
 		for idx, d := range rsp.Response.Data {
-			embeddings[idx] = make([]float64, len(d.Embedding))
+			embeddings[l+idx] = make([]float64, len(d.Embedding))
 			for i, emb := range d.Embedding { // *float64 -> float64
-				embeddings[idx][i] = *emb
+				embeddings[l+idx][i] = *emb
 			}
 		}
 
