@@ -32,7 +32,6 @@ import (
 	"github.com/cloudwego/eino/callbacks"
 	fmodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-	"github.com/cloudwego/eino/utils/safe"
 )
 
 var (
@@ -110,6 +109,9 @@ type ChatModelConfig struct {
 	// Range: -2.0 to 2.0. Positive values increase likelihood of new topics
 	// Optional. Default: 0
 	PresencePenalty *float32 `json:"presence_penalty,omitempty"`
+
+	// CustomHeader the http header passed to model when requesting model
+	CustomHeader map[string]string `json:"custom_header"`
 }
 
 func buildClient(config *ChatModelConfig) *arkruntime.Client {
@@ -178,6 +180,8 @@ func (cm *ChatModel) Generate(ctx context.Context, in []*schema.Message, opts ..
 		Tools:       nil,
 	}, opts...)
 
+	arkOpts := fmodel.GetImplSpecificOptions(&arkOptions{customHeaders: cm.config.CustomHeader}, opts...)
+
 	req, err := cm.genRequest(in, options)
 	if err != nil {
 		return nil, err
@@ -202,7 +206,8 @@ func (cm *ChatModel) Generate(ctx context.Context, in []*schema.Message, opts ..
 		Config:   reqConf,
 	})
 
-	resp, err := cm.client.CreateChatCompletion(ctx, *req)
+	resp, err := cm.client.CreateChatCompletion(ctx, *req,
+		arkruntime.WithCustomHeaders(arkOpts.customHeaders))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat completion: %w", err)
 	}
@@ -239,6 +244,8 @@ func (cm *ChatModel) Stream(ctx context.Context, in []*schema.Message, opts ...f
 		Tools:       nil,
 	}, opts...)
 
+	arkOpts := fmodel.GetImplSpecificOptions(&arkOptions{customHeaders: cm.config.CustomHeader}, opts...)
+
 	req, err := cm.genRequest(in, options)
 	if err != nil {
 		return nil, err
@@ -266,7 +273,8 @@ func (cm *ChatModel) Stream(ctx context.Context, in []*schema.Message, opts ...f
 		Config:   reqConf,
 	})
 
-	stream, err := cm.client.CreateChatCompletionStream(ctx, *req)
+	stream, err := cm.client.CreateChatCompletionStream(ctx, *req,
+		arkruntime.WithCustomHeaders(arkOpts.customHeaders))
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +284,7 @@ func (cm *ChatModel) Stream(ctx context.Context, in []*schema.Message, opts ...f
 		defer func() {
 			panicErr := recover()
 			if panicErr != nil {
-				_ = sw.Send(nil, safe.NewPanicErr(panicErr, debug.Stack()))
+				_ = sw.Send(nil, newPanicErr(panicErr, debug.Stack()))
 			}
 
 			sw.Close()
@@ -295,7 +303,7 @@ func (cm *ChatModel) Stream(ctx context.Context, in []*schema.Message, opts ...f
 				return
 			}
 
-			msg, msgFound, e := cm.resolveStreamResponse(resp)
+			msg, msgFound, e := resolveStreamResponse(resp)
 			if e != nil {
 				_ = sw.Send(nil, e)
 				return
@@ -419,16 +427,23 @@ func (cm *ChatModel) resolveChatResponse(resp model.ChatCompletionResponse) (msg
 			FinishReason: string(choice.FinishReason),
 			Usage:        toEinoTokenUsage(&resp.Usage),
 		},
+		Extra: map[string]any{
+			keyOfRequestID: arkRequestID(resp.ID),
+		},
 	}
 
 	if content != nil && content.StringValue != nil {
 		msg.Content = *content.StringValue
 	}
 
+	if choice.Message.ReasoningContent != nil {
+		msg.Extra[keyOfReasoningContent] = *choice.Message.ReasoningContent
+	}
+
 	return msg, nil
 }
 
-func (cm *ChatModel) resolveStreamResponse(resp model.ChatCompletionStreamResponse) (msg *schema.Message, msgFound bool, err error) {
+func resolveStreamResponse(resp model.ChatCompletionStreamResponse) (msg *schema.Message, msgFound bool, err error) {
 	if len(resp.Choices) > 0 {
 
 		for _, choice := range resp.Choices {
@@ -445,6 +460,13 @@ func (cm *ChatModel) resolveStreamResponse(resp model.ChatCompletionStreamRespon
 					FinishReason: string(choice.FinishReason),
 					Usage:        toEinoTokenUsage(resp.Usage),
 				},
+				Extra: map[string]any{
+					keyOfRequestID: arkRequestID(resp.ID),
+				},
+			}
+
+			if choice.Delta.ReasoningContent != nil {
+				msg.Extra[keyOfReasoningContent] = *choice.Delta.ReasoningContent
 			}
 
 			break
@@ -456,6 +478,9 @@ func (cm *ChatModel) resolveStreamResponse(resp model.ChatCompletionStreamRespon
 		msg = &schema.Message{
 			ResponseMeta: &schema.ResponseMeta{
 				Usage: toEinoTokenUsage(resp.Usage),
+			},
+			Extra: map[string]any{
+				keyOfRequestID: arkRequestID(resp.ID),
 			},
 		}
 	}
@@ -623,4 +648,20 @@ func closeArkStreamReader(r *autils.ChatCompletionStreamReader) error {
 
 func ptrOf[T any](v T) *T {
 	return &v
+}
+
+type panicErr struct {
+	info  any
+	stack []byte
+}
+
+func (p *panicErr) Error() string {
+	return fmt.Sprintf("panic error: %v, \nstack: %s", p.info, string(p.stack))
+}
+
+func newPanicErr(info any, stack []byte) error {
+	return &panicErr{
+		info:  info,
+		stack: stack,
+	}
 }
